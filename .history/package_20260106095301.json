@@ -8,8 +8,7 @@
     "start": "node dist/server.js",
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "lint": "tsc --noEmit",
-    "build:dataset": "ts-node scripts/buildDataset.ts",
-    "build:image-index": "ts-node scripts/buildImageIndex.ts"
+    "build:dataset": "ts-node scripts/buildDataset.ts"
   },
   "keywords": [],
   "author": "",
