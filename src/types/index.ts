@@ -50,6 +50,14 @@ export interface PropertyCandidate {
 
 export interface CandidateWithDistance extends PropertyCandidate {
   distanceMeters: number;
+  listPriceLow?: number;
+  bedroomsTotal?: number;
+  bathroomsTotal?: number;
+  livingArea?: number;
+  listingUrl?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
 }
 
 export interface VisualMatchCandidate extends CandidateWithDistance {

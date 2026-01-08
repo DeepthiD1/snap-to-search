@@ -1,8 +1,35 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import './App.css';
-import type { RankedMatchResult, SearchResponsePayload } from './types';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000';
+const API_BASE_URL = import.meta.env.VITE_API_BASE ?? 'http://localhost:4000';
+
+type ListingSummary = {
+  listingId: string;
+  addressLine?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  price?: number | null;
+  beds?: number | null;
+  baths?: number | null;
+  sqft?: number | null;
+  listingUrl?: string | null;
+};
+
+type PHashMatch = {
+  listingId: string;
+  filename: string;
+  hash: string;
+  distance: number;
+  previewImageUrl: string; // backend returns absolute now
+  details: ListingSummary | null;
+};
+
+type PHashResponse = {
+  queryHash: string;
+  top: PHashMatch[];
+  error?: string;
+};
 
 interface UiState {
   loading: boolean;
@@ -10,32 +37,52 @@ interface UiState {
   info?: string;
 }
 
+const INITIAL_DISPLAY_LIMIT = 10;
+
+function fmtMoney(n?: number | null) {
+  if (typeof n !== 'number') return '—';
+  return n.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+}
+
+function fmtNum(n?: number | null) {
+  if (typeof n !== 'number') return '—';
+  return n.toLocaleString();
+}
+
 function App() {
-  const sessionId = useMemo(() => self.crypto.randomUUID(), []);
+  const parseNumber = (value: string): number | undefined => {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  };
+
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const captureInputRef = useRef<HTMLInputElement>(null);
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
   const [uiState, setUiState] = useState<UiState>({ loading: false });
-  const [matches, setMatches] = useState<RankedMatchResult[]>([]);
-  const [candidateCount, setCandidateCount] = useState<number | null>(null);
-  const [responseStatus, setResponseStatus] = useState<SearchResponsePayload['status'] | null>(null);
-  const [nextActionToken, setNextActionToken] = useState<string | null>(null);
+  const [queryHash, setQueryHash] = useState<string | null>(null);
+  const [top, setTop] = useState<PHashMatch[]>([]);
+  const [showAllMatches, setShowAllMatches] = useState(false);
+
+  const [radiusMiles, setRadiusMiles] = useState<number>(5);
+  const [manualLatitude, setManualLatitude] = useState<string>('');
+  const [manualLongitude, setManualLongitude] = useState<string>('');
+  const [manualAccuracy, setManualAccuracy] = useState<string>('');
 
   useEffect(() => {
     return () => {
-      if (previewUrl) {
-        URL.revokeObjectURL(previewUrl);
-      }
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
     };
   }, [previewUrl]);
 
   const resetResults = () => {
-    setMatches([]);
-    setCandidateCount(null);
-    setResponseStatus(null);
-    setNextActionToken(null);
+    setQueryHash(null);
+    setTop([]);
+    setShowAllMatches(false);
   };
 
   const handleFileSelection = (file: File | null) => {
@@ -43,9 +90,7 @@ function App() {
     setUiState({ loading: false });
 
     if (!file) {
-      if (previewUrl) {
-        URL.revokeObjectURL(previewUrl);
-      }
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
       setSelectedFile(null);
       setPreviewUrl(null);
       return;
@@ -59,75 +104,59 @@ function App() {
     });
   };
 
-  const handleSubmit = async () => {
-    if (!selectedFile) {
-      return;
-    }
+  const handlePHashTest = async () => {
+    if (!selectedFile) return;
 
-    setMatches([]);
-    setCandidateCount(null);
-    setResponseStatus(null);
-    setNextActionToken(null);
-    setUiState({ loading: true, info: 'Comparing photo with dataset...' });
+    resetResults();
+    setUiState({ loading: true, info: 'Finding matches (pHash top 5)…' });
 
     try {
       const formData = new FormData();
       formData.append('photo', selectedFile, selectedFile.name || 'photo.jpg');
-      formData.append('sessionId', sessionId);
 
-      const response = await fetch(`${API_BASE_URL}/api/snap-to-search`, {
+    const radiusMeters = radiusMiles * 1609.344;
+    formData.append('radiusOverrideMeters', String(radiusMeters));
+    formData.append('radiusMiles', String(radiusMiles));
+
+    const lat = parseNumber(manualLatitude);
+    const lon = parseNumber(manualLongitude);
+    if (typeof lat === 'number' && typeof lon === 'number') {
+      formData.append('manualLatitude', String(lat));
+      formData.append('manualLongitude', String(lon));
+      const accuracy = parseNumber(manualAccuracy);
+      if (typeof accuracy === 'number') {
+        formData.append('manualAccuracy', String(accuracy));
+      }
+    }
+
+      const response = await fetch(`${API_BASE_URL}/api/phash-test`, {
         method: 'POST',
         body: formData,
       });
 
-      const payload = (await response.json()) as SearchResponsePayload & { nextActionToken?: string; error?: string };
+      const payload = (await response.json()) as PHashResponse;
+
       if (!response.ok) {
-        throw new Error(payload.error ?? 'Failed to run search');
+        throw new Error(payload.error ?? 'pHash request failed');
       }
 
-      updateResults(payload);
-    } catch (error) {
-      setUiState({ loading: false, error: (error as Error).message });
+      setQueryHash(payload.queryHash);
+      setTop(payload.top ?? []);
+      setShowAllMatches(false);
+      setUiState({ loading: false, info: payload.top?.length ? undefined : 'No matches found.' });
+    } catch (err) {
+      setUiState({ loading: false, error: (err as Error).message });
     }
   };
 
-  const handleExpand = async () => {
-    if (!nextActionToken) {
-      return;
-    }
-    setUiState({ loading: true, info: 'Re-scoring larger candidate set...' });
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/snap-to-search/${nextActionToken}/expand`, {
-        method: 'POST',
-      });
-      const payload = (await response.json()) as SearchResponsePayload & { error?: string };
-      if (!response.ok) {
-        throw new Error(payload.error ?? 'Failed to expand search');
-      }
-      updateResults(payload);
-    } catch (error) {
-      setUiState({ loading: false, error: (error as Error).message });
-    }
-  };
-
-  const updateResults = (payload: SearchResponsePayload & { nextActionToken?: string }) => {
-    setMatches(payload.matches ?? []);
-    setCandidateCount(payload.candidateCount ?? null);
-    setResponseStatus(payload.status);
-    setNextActionToken(payload.nextActionToken ?? null);
-    setUiState({
-      loading: false,
-      info: payload.status === 'expanded' ? 'Expanded dataset search applied' : undefined,
-    });
-  };
-
-  const readyToSubmit = Boolean(selectedFile && !uiState.loading);
+  const ready = Boolean(selectedFile && !uiState.loading);
+  const displayedMatches = showAllMatches ? top : top.slice(0, Math.min(top.length, INITIAL_DISPLAY_LIMIT));
 
   return (
     <main className="app-shell">
       <header>
         <h1>Snap-to-Search</h1>
-        <p>Upload a facade photo and we will compare it against our sample CSV dataset.</p>
+        <p>pHash prototype: upload a photo and get top-5 closest matches, with listing details.</p>
       </header>
 
       <section className="capture-panel">
@@ -146,19 +175,80 @@ function App() {
           accept="image/*"
           capture="environment"
           hidden
-          onChange={(event) => handleFileSelection(event.target.files?.[0] ?? null)}
+          onChange={(e) => handleFileSelection(e.target.files?.[0] ?? null)}
         />
         <input
           ref={uploadInputRef}
           type="file"
           accept="image/*"
           hidden
-          onChange={(event) => handleFileSelection(event.target.files?.[0] ?? null)}
+          onChange={(e) => handleFileSelection(e.target.files?.[0] ?? null)}
         />
+
+        <div style={{ marginTop: 12 }}>
+          <p className="info">
+            Location is derived from the photo's EXIF metadata, so make sure the image contains GPS
+            coordinates before searching.
+          </p>
+          <div style={{ marginTop: 10 }}>
+            <label>
+              Search radius (miles): <b>{radiusMiles.toFixed(1)}</b>
+            </label>
+            <input
+              type="range"
+              min={0.1}
+              max={10}
+              step={0.1}
+              value={radiusMiles}
+              onChange={(e) => setRadiusMiles(Number(e.target.value))}
+              style={{ width: '100%' }}
+            />
+            <small>Tip: Start with 0.5 miles, increase if results are sparse.</small>
+          </div>
+          <div style={{ marginTop: 20, display: 'grid', gap: 10 }}>
+            <strong>Manual location (for testing only)</strong>
+            <p style={{ margin: 0 }}>
+              Fill both latitude and longitude to override the missing EXIF GPS data. Clear the fields
+              when you're done so the photo's metadata is used again.
+            </p>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <label style={{ flex: '1 1 180px' }}>
+                Latitude
+                <input
+                  type="number"
+                  step="0.000001"
+                  value={manualLatitude}
+                  onChange={(e) => setManualLatitude(e.target.value)}
+                  placeholder="e.g. 37.1305"
+                />
+              </label>
+              <label style={{ flex: '1 1 180px' }}>
+                Longitude
+                <input
+                  type="number"
+                  step="0.000001"
+                  value={manualLongitude}
+                  onChange={(e) => setManualLongitude(e.target.value)}
+                  placeholder="-121.6544"
+                />
+              </label>
+            </div>
+            <label>
+              Accuracy (meters, optional)
+              <input
+                type="number"
+                step="1"
+                value={manualAccuracy}
+                onChange={(e) => setManualAccuracy(e.target.value)}
+                placeholder="50"
+              />
+            </label>
+          </div>
+        </div>
 
         {previewUrl ? (
           <div className="preview-card">
-            <img src={previewUrl} alt="Selected home" />
+            <img src={previewUrl} alt="Selected" />
             <div>
               <strong>Selected photo</strong>
               <p>{selectedFile?.name ?? 'Captured photo'}</p>
@@ -171,63 +261,81 @@ function App() {
           <p className="placeholder">No photo selected yet.</p>
         )}
 
-        <p className="hint">
-          This prototype only uses the uploaded photo and the CSV-backed gallery - no device or IP location data is
-          collected.
-        </p>
-
-        <button type="button" className="cta" disabled={!readyToSubmit} onClick={handleSubmit}>
-          {uiState.loading ? 'Searching...' : 'Find this home'}
+        <button type="button" className="cta" disabled={!ready} onClick={handlePHashTest}>
+          {uiState.loading ? 'Searching…' : 'Find matches (pHash top 5)'}
         </button>
+
         {uiState.error && <p className="error">{uiState.error}</p>}
         {uiState.info && <p className="info">{uiState.info}</p>}
       </section>
 
-      {matches.length > 0 && (
+      {top.length > 0 && (
         <section className="results-panel">
           <div className="results-header">
             <div>
               <h2>Top matches</h2>
-              {candidateCount !== null && <p>{candidateCount} homes checked in the dataset.</p>}
+              {queryHash && <p>Query hash: {queryHash}</p>}
+              {top.length > 0 && (
+                <p className="info">
+                  Showing {displayedMatches.length} of {top.length} matches.
+                </p>
+              )}
             </div>
-            {responseStatus && <span className="status-pill">{responseStatus}</span>}
           </div>
 
           <div className="matches-grid">
-            {matches.map((match) => (
-              <article key={match.propertyId} className="match-card">
-                <img src={match.previewImageUrl} alt={match.addressLine} />
-                <div className="match-body">
-                  <h3>{match.addressLine}</h3>
-                  <p>
-                    Confidence: <strong>{match.confidenceLabel.replace('_', ' ')}</strong>
-                  </p>
-                  <ul>
-                    {match.reasons.slice(0, 3).map((reason) => (
-                      <li key={reason}>{reason}</li>
-                    ))}
-                  </ul>
-                  <button type="button" className="primary ghost">
-                    View listing
-                  </button>
-                </div>
-              </article>
-            ))}
-          </div>
+            {displayedMatches.map((m) => {
+              const d = m.details;
+              const title =
+                d?.addressLine
+                  ? `${d.addressLine}${d.city ? `, ${d.city}` : ''}${d.state ? ` ${d.state}` : ''}${d.zip ? ` ${d.zip}` : ''}`
+                  : `Listing ${m.listingId}`;
 
-          <div className="results-actions">
-            <button
-              type="button"
-              className="secondary"
-              onClick={handleExpand}
-              disabled={!nextActionToken || uiState.loading}
-            >
-              Not this - expand dataset
-            </button>
-            <button type="button" className="tertiary" onClick={() => window.location.reload()}>
-              Start over
-            </button>
+              return (
+                <article key={m.listingId} className="match-card">
+                  <img src={m.previewImageUrl} alt={title} />
+                  <div className="match-body">
+                    <h3>{title}</h3>
+
+                    <p>
+                      pHash distance: <strong>{m.distance}</strong>
+                    </p>
+
+                    <p>
+                      Price: <strong>{fmtMoney(d?.price ?? null)}</strong>
+                    </p>
+                    <p>
+                      Beds/Baths: <strong>{d?.beds ?? '—'}</strong> / <strong>{d?.baths ?? '—'}</strong>
+                    </p>
+                    <p>
+                      Sqft: <strong>{fmtNum(d?.sqft ?? null)}</strong>
+                    </p>
+
+                    {d?.listingUrl ? (
+                      <a className="primary ghost" href={d.listingUrl} target="_blank" rel="noreferrer">
+                        View listing
+                      </a>
+                    ) : (
+                      <button type="button" className="primary ghost" disabled>
+                        View listing
+                      </button>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
           </div>
+          {top.length > INITIAL_DISPLAY_LIMIT && (
+            <div className="results-actions">
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setShowAllMatches((prev) => !prev)}
+              >
+                {showAllMatches ? 'Show top 10 only' : 'Show 20 matches'}
+              </button>
+            </div>
+          )}
         </section>
       )}
     </main>
