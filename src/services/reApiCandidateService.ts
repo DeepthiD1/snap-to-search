@@ -36,6 +36,10 @@ export class ReApiCandidateService {
       radius,
       size: params.size ?? 50,
       active: params.active ?? true,
+      sold: false,
+      bathrooms_min: 1,
+      bedrooms_min: 1,
+      listing_property_type: 'RESIDENTIAL',
     };
 
     const r = await fetch(`${this.baseUrl}/v2/MLSSearch`, {

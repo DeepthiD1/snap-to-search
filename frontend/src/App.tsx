@@ -71,7 +71,6 @@ function App() {
   const [radiusMiles, setRadiusMiles] = useState<number>(5);
   const [manualLatitude, setManualLatitude] = useState<string>('');
   const [manualLongitude, setManualLongitude] = useState<string>('');
-  const [manualAccuracy, setManualAccuracy] = useState<string>('');
 
   useEffect(() => {
     return () => {
@@ -118,16 +117,12 @@ function App() {
     formData.append('radiusOverrideMeters', String(radiusMeters));
     formData.append('radiusMiles', String(radiusMiles));
 
-    const lat = parseNumber(manualLatitude);
-    const lon = parseNumber(manualLongitude);
-    if (typeof lat === 'number' && typeof lon === 'number') {
-      formData.append('manualLatitude', String(lat));
-      formData.append('manualLongitude', String(lon));
-      const accuracy = parseNumber(manualAccuracy);
-      if (typeof accuracy === 'number') {
-        formData.append('manualAccuracy', String(accuracy));
+      const lat = parseNumber(manualLatitude);
+      const lon = parseNumber(manualLongitude);
+      if (typeof lat === 'number' && typeof lon === 'number') {
+        formData.append('manualLatitude', String(lat));
+        formData.append('manualLongitude', String(lon));
       }
-    }
 
       const response = await fetch(`${API_BASE_URL}/api/phash-test`, {
         method: 'POST',
@@ -233,16 +228,6 @@ function App() {
                 />
               </label>
             </div>
-            <label>
-              Accuracy (meters, optional)
-              <input
-                type="number"
-                step="1"
-                value={manualAccuracy}
-                onChange={(e) => setManualAccuracy(e.target.value)}
-                placeholder="50"
-              />
-            </label>
           </div>
         </div>
 
@@ -311,15 +296,6 @@ function App() {
                       Sqft: <strong>{fmtNum(d?.sqft ?? null)}</strong>
                     </p>
 
-                    {d?.listingUrl ? (
-                      <a className="primary ghost" href={d.listingUrl} target="_blank" rel="noreferrer">
-                        View listing
-                      </a>
-                    ) : (
-                      <button type="button" className="primary ghost" disabled>
-                        View listing
-                      </button>
-                    )}
                   </div>
                 </article>
               );
